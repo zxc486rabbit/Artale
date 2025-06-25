@@ -59,26 +59,12 @@
 
   <hr>
   <h2>📋 全部回報紀錄（來自 Google Sheet）</h2>
-  <div style="text-align:right;">
-    🔍搜尋：<input type="text" id="logFilter" placeholder="頻道 / 回報者 / 狀態...">
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th>Boss</th>
-        <th>頻道</th>
-        <th>狀態</th>
-        <th>時間</th>
-        <th>回報者</th>
-      </tr>
-    </thead>
-    <tbody id="sheetLog"></tbody>
-  </table>
+  <iframe src="https://script.google.com/macros/s/AKfycbyd-ozk9faY-IThiYJEo7-OwJS0P6d8fIzh98ELO9qos15LETfEdz95qemJH8m2twos/exec"
+          width="100%" height="400" style="border:1px solid #ccc;"></iframe>
 
   <audio id="pingSound" src="https://freesound.org/data/previews/341/341695_5260877-lq.mp3"></audio>
 
   <script>
-    const SHEET_API = "https://script.google.com/macros/s/AKfycbyd-ozk9faY-IThiYJEo7-OwJS0P6d8fIzh98ELO9qos15LETfEdz95qemJH8m2twos/exec";
     const bossSettings = {
       mushroom: { min: 60 * 60 * 1000, max: 90 * 60 * 1000 },
       witch: { min: 3 * 60 * 60 * 1000, max: 5 * 60 * 60 * 1000 },
@@ -112,7 +98,6 @@
       else data[chKey] = { status, time: Date.now(), notified: false };
       save(data);
 
-      // 🧠 使用 <form> 提交資料，避免 fetch 的 CORS 問題
       document.getElementById("formBoss").value = bossName;
       document.getElementById("formChannel").value = chKey;
       document.getElementById("formStatus").value = status;
@@ -120,7 +105,6 @@
       document.getElementById("reportForm").submit();
 
       drawTable();
-      loadSheetLog();
     }
 
     function drawTable() {
@@ -171,39 +155,12 @@
       });
     }
 
-    async function loadSheetLog() {
-      try {
-        const res = await fetch(SHEET_API);
-        const data = await res.json();
-        const tbody = document.getElementById("sheetLog");
-        const keyword = document.getElementById("logFilter").value.toLowerCase();
-        tbody.innerHTML = "";
-        const sorted = data.sort((a, b) => new Date(b.時間) - new Date(a.時間));
-        sorted.forEach(row => {
-          const match = !keyword || Object.values(row).some(v => v.toLowerCase?.().includes(keyword));
-          if (!match) return;
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${row.Boss}</td>
-            <td>${row.頻道}</td>
-            <td>${row.狀態}</td>
-            <td>${new Date(row.時間).toLocaleString("zh-TW")}</td>
-            <td>${row.回報者 || '-'}</td>`;
-          tbody.appendChild(tr);
-        });
-      } catch (err) {
-        console.warn("無法讀取 Google Sheet 資料（可能是 CORS）", err);
-      }
-    }
-
     bossSelect.addEventListener("change", drawTable);
     document.getElementById("searchInput").addEventListener("input", drawTable);
-    document.getElementById("logFilter").addEventListener("input", loadSheetLog);
     document.getElementById("reporter").value = localStorage.getItem("reporter") || "";
     document.getElementById("reporter").addEventListener("input", e => localStorage.setItem("reporter", e.target.value));
     drawTable();
-    loadSheetLog();
-    setInterval(() => { drawTable(); loadSheetLog(); }, 30000);
+    setInterval(drawTable, 30000);
   </script>
 </body>
 </html>
