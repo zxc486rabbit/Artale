@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>Artale Boss 頻道巡邏</title>
+  <style>
+    body { font-family: "Segoe UI", sans-serif; background: #f1f3f5; padding: 20px; }
+    h1 { text-align: center; }
+    input, select, button { padding: 6px 10px; font-size: 1rem; margin: 5px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; background: #fff; }
+    th, td { border: 1px solid #ccc; padding: 6px; text-align: center; font-size: 0.9rem; }
+    .soon { background: #fff3cd; }
+    .yes { background: #28a745; color: white; }
+    .no { background: #dc3545; color: white; }
+    .reset { background: #6c757d; color: white; }
+    .status-✅ { background: #d4edda; }
+    .status-❌ { background: #f8d7da; }
+    .status-未記錄 { background: #e2e3e5; }
+  </style>
+</head>
+<body>
+  <h1>🛡️ Artale Boss 頻道巡邏系統</h1>
+
+  <div style="text-align:center;">
+    <label>
+      🙋‍♂️ 記錄者：<input id="reporter" placeholder="輸入你的暱稱" />
+    </label>
+    <select id="bossSelect">
+      <option value="mushroom">🍄 菇菇王</option>
+      <option value="witch">❄️ 雪山魔女</option>
+      <option value="bookman">📜 書生幽靈</option>
+    </select>
+    <input type="text" id="searchInput" placeholder="搜尋頻道，如 555" />
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>頻道</th>
+        <th>狀態</th>
+        <th>上次紀錄</th>
+        <th>下次刷新區間</th>
+        <th>剩餘時間</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="channelTable"></tbody>
+  </table>
+
+  <hr>
+  <h2>📋 全部回報紀錄（來自 Google Sheet）</h2>
+  <div style="text-align:right;">
+    🔍搜尋：<input type="text" id="logFilter" placeholder="頻道 / 回報者 / 狀態...">
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Boss</th>
+        <th>頻道</th>
+        <th>狀態</th>
+        <th>時間</th>
+        <th>回報者</th>
+      </tr>
+    </thead>
+    <tbody id="sheetLog"></tbody>
+  </table>
+
+  <audio id="pingSound" src="https://freesound.org/data/previews/341/341695_5260877-lq.mp3"></audio>
+
+  <script>
+    const SHEET_API = "https://script.google.com/macros/s/AKfycbxnO4TJaTneo9knUkg-6qECUA9hRHUbSEoiWlYsz5beesGL6SBk8hLpoUHn2oobGD-W/exec";
+    const webhookURL = "https://discord.com/api/webhooks/1387388993204654242/ODt2PR68hxjnpCiMpMnfRa2X1BmhSLB2tJFibRBsZjftVAYZCoA17UDNoJ4DBG65HOca";
+    const bossSettings = {
+      mushroom: { min: 60 * 60 * 1000, max: 90 * 60 * 1000 },
+      witch: { min: 3 * 60 * 60 * 1000, max: 5 * 60 * 60 * 1000 },
+      bookman: { min: 2.5 * 60 * 60 * 1000, max: 5 * 60 * 60 * 1000 },
+    };
+
+    const startCH = 1, endCH = 4000, perPage = 100;
+    const bossSelect = document.getElementById("bossSelect");
+    const sound = document.getElementById("pingSound");
+    const getKey = () => `boss_${bossSelect.value}_data`;
+    const format = ts => new Date(ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
+    const timeLeft = (ts, boss) => {
+      const max = bossSettings[boss].max;
+      const left = ts + max - Date.now();
+      return left > 0 ? `${Math.floor(left / 60000)} 分` : "已過";
+    };
+    const range = (ts, boss) => {
+      const { min, max } = bossSettings[boss];
+      return `${format(ts + min)} ~ ${format(ts + max)}`;
+    }
+
+    const load = () => JSON.parse(localStorage.getItem(getKey()) || '{}');
+    const save = (obj) => localStorage.setItem(getKey(), JSON.stringify(obj));
+
+    function notifyDiscord(chKey, bossName) {
+      fetch(webhookURL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: `📣 Boss 提醒！\n✅ [${bossName}] 頻道 ${chKey} 進入刷新區間，請盡快查看！` })
+      });
+    }
+
+    function update(chKey, action) {
+      const reporter = document.getElementById("reporter").value.trim();
+      const data = load();
+      if (action === 'reset') delete data[chKey];
+      else data[chKey] = { status: action === 'yes' ? '✅' : '❌', time: Date.now(), notified: false };
+      save(data);
+      fetch(SHEET_API, {
+        method: "POST",
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          boss: bossSelect.options[bossSelect.selectedIndex].text,
+          channel: chKey,
+          status: data[chKey]?.status || '未記錄',
+          reporter
+        })
+      });
+      drawTable();
+      loadSheetLog();
+    }
+
+    function drawTable() {
+      const table = document.getElementById("channelTable");
+      table.innerHTML = "";
+      const data = load();
+      const boss = bossSelect.value;
+      const now = Date.now();
+      const setting = bossSettings[boss];
+      const bossName = bossSelect.options[bossSelect.selectedIndex].text;
+      const keyword = document.getElementById("searchInput").value.trim();
+      let list = [];
+      if (keyword) {
+        const ch = parseInt(keyword);
+        if (!isNaN(ch) && ch >= startCH && ch <= endCH) list.push(ch);
+      } else {
+        const start = 1;
+        for (let i = start; i <= start + perPage; i++) list.push(i);
+      }
+      list.forEach(i => {
+        const chKey = `CH${i}`;
+        const record = data[chKey];
+        const tr = document.createElement("tr");
+        if (record && record.time) {
+          const elapsed = now - record.time;
+          if (elapsed >= setting.min && elapsed <= setting.max) {
+            tr.classList.add("soon");
+            if (!record.notified) {
+              sound.play().catch(() => {});
+              notifyDiscord(chKey, bossName);
+              record.notified = true;
+              save(data);
+            }
+          }
+        }
+        const statusClass = `status-${record?.status || '未記錄'}`;
+        tr.classList.add(statusClass);
+        tr.innerHTML = `
+          <td>${chKey}</td>
+          <td>${record?.status || "未記錄"}</td>
+          <td>${record?.time ? format(record.time) : "-"}</td>
+          <td>${record?.time ? range(record.time, boss) : "-"}</td>
+          <td>${record?.time ? timeLeft(record.time, boss) : "-"}</td>
+          <td>
+            <button class="yes" onclick="update('${chKey}', 'yes')">✅</button>
+            <button class="no" onclick="update('${chKey}', 'no')">❌</button>
+            <button class="reset" onclick="update('${chKey}', 'reset')">🗑</button>
+          </td>`;
+        table.appendChild(tr);
+      });
+    }
+
+    async function loadSheetLog() {
+      const res = await fetch(SHEET_API);
+      const data = await res.json();
+      const tbody = document.getElementById("sheetLog");
+      const keyword = document.getElementById("logFilter").value.toLowerCase();
+      tbody.innerHTML = "";
+      const sorted = data.sort((a, b) => new Date(b.時間) - new Date(a.時間));
+      sorted.forEach(row => {
+        const match = !keyword || Object.values(row).some(v => v.toLowerCase?.().includes(keyword));
+        if (!match) return;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${row.Boss}</td>
+          <td>${row.頻道}</td>
+          <td>${row.狀態}</td>
+          <td>${new Date(row.時間).toLocaleString("zh-TW")}</td>
+          <td>${row.回報者 || '-'}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    bossSelect.addEventListener("change", drawTable);
+    document.getElementById("searchInput").addEventListener("input", drawTable);
+    document.getElementById("logFilter").addEventListener("input", loadSheetLog);
+    document.getElementById("reporter").value = localStorage.getItem("reporter") || "";
+    document.getElementById("reporter").addEventListener("input", e => localStorage.setItem("reporter", e.target.value));
+    drawTable();
+    loadSheetLog();
+    setInterval(() => { drawTable(); loadSheetLog(); }, 30000);
+  </script>
+</body>
+</html>
