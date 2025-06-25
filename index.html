@@ -76,10 +76,8 @@
       bookman: { min: 2.5 * 60 * 60 * 1000, max: 5 * 60 * 60 * 1000 },
     };
 
-    const startCH = 1, endCH = 4000, perPage = 100;
-    const bossSelect = document.getElementById("bossSelect");
-    const sound = document.getElementById("pingSound");
-    const getKey = () => `boss_${bossSelect.value}_data`;
+    let latestData = {};
+
     const format = ts => new Date(ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
     const timeLeft = (ts, boss) => {
       const max = bossSettings[boss].max;
@@ -89,71 +87,78 @@
     const range = (ts, boss) => {
       const { min, max } = bossSettings[boss];
       return `${format(ts + min)} ~ ${format(ts + max)}`;
-    }
+    };
 
-    const load = () => JSON.parse(localStorage.getItem(getKey()) || '{}');
-    const save = (obj) => localStorage.setItem(getKey(), JSON.stringify(obj));
-
-    function notifyDiscord(chKey, bossName) {
-      fetch(webhookURL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `📣 Boss 提醒！\n✅ [${bossName}] 頻道 ${chKey} 進入刷新區間，請盡快查看！` })
+    async function loadSheetLog() {
+      const res = await fetch(SHEET_API);
+      const data = await res.json();
+      const tbody = document.getElementById("sheetLog");
+      const keyword = document.getElementById("logFilter").value.toLowerCase();
+      tbody.innerHTML = "";
+      const sorted = data.sort((a, b) => new Date(b.時間) - new Date(a.時間));
+      latestData = {};
+      sorted.forEach(row => {
+        const chKey = row.頻道;
+        const boss = row.Boss;
+        if (!latestData[boss]) latestData[boss] = {};
+        if (!latestData[boss][chKey]) {
+          latestData[boss][chKey] = {
+            status: row.狀態,
+            time: new Date(row.時間).getTime(),
+            reporter: row.回報者
+          };
+        }
+        const match = !keyword || Object.values(row).some(v => v.toLowerCase?.().includes(keyword));
+        if (!match) return;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${row.Boss}</td>
+          <td>${row.頻道}</td>
+          <td>${row.狀態}</td>
+          <td>${new Date(row.時間).toLocaleString("zh-TW")}</td>
+          <td>${row.回報者 || '-'}</td>`;
+        tbody.appendChild(tr);
       });
+      drawTable();
     }
 
     function update(chKey, action) {
+      const boss = document.getElementById("bossSelect").value;
+      const bossText = document.getElementById("bossSelect").selectedOptions[0].text;
       const reporter = document.getElementById("reporter").value.trim();
-      const data = load();
-      if (action === 'reset') delete data[chKey];
-      else data[chKey] = { status: action === 'yes' ? '✅' : '❌', time: Date.now(), notified: false };
-      save(data);
       fetch(SHEET_API, {
         method: "POST",
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          boss: bossSelect.options[bossSelect.selectedIndex].text,
+          boss: bossText,
           channel: chKey,
-          status: data[chKey]?.status || '未記錄',
+          status: action === 'yes' ? '✅' : action === 'no' ? '❌' : '未記錄',
           reporter
         })
-      });
-      drawTable();
-      loadSheetLog();
+      }).then(loadSheetLog);
     }
 
     function drawTable() {
       const table = document.getElementById("channelTable");
       table.innerHTML = "";
-      const data = load();
-      const boss = bossSelect.value;
+      const boss = document.getElementById("bossSelect").value;
       const now = Date.now();
       const setting = bossSettings[boss];
-      const bossName = bossSelect.options[bossSelect.selectedIndex].text;
       const keyword = document.getElementById("searchInput").value.trim();
       let list = [];
       if (keyword) {
         const ch = parseInt(keyword);
-        if (!isNaN(ch) && ch >= startCH && ch <= endCH) list.push(ch);
+        if (!isNaN(ch) && ch >= 1 && ch <= 4000) list.push(ch);
       } else {
-        const start = 1;
-        for (let i = start; i <= start + perPage; i++) list.push(i);
+        for (let i = 1; i <= 100; i++) list.push(i);
       }
       list.forEach(i => {
         const chKey = `CH${i}`;
-        const record = data[chKey];
+        const record = latestData[boss]?.[chKey];
         const tr = document.createElement("tr");
-        if (record && record.time) {
+        if (record?.time) {
           const elapsed = now - record.time;
-          if (elapsed >= setting.min && elapsed <= setting.max) {
-            tr.classList.add("soon");
-            if (!record.notified) {
-              sound.play().catch(() => {});
-              notifyDiscord(chKey, bossName);
-              record.notified = true;
-              save(data);
-            }
-          }
+          if (elapsed >= setting.min && elapsed <= setting.max) tr.classList.add("soon");
         }
         const statusClass = `status-${record?.status || '未記錄'}`;
         tr.classList.add(statusClass);
@@ -172,35 +177,13 @@
       });
     }
 
-    async function loadSheetLog() {
-      const res = await fetch(SHEET_API);
-      const data = await res.json();
-      const tbody = document.getElementById("sheetLog");
-      const keyword = document.getElementById("logFilter").value.toLowerCase();
-      tbody.innerHTML = "";
-      const sorted = data.sort((a, b) => new Date(b.時間) - new Date(a.時間));
-      sorted.forEach(row => {
-        const match = !keyword || Object.values(row).some(v => v.toLowerCase?.().includes(keyword));
-        if (!match) return;
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${row.Boss}</td>
-          <td>${row.頻道}</td>
-          <td>${row.狀態}</td>
-          <td>${new Date(row.時間).toLocaleString("zh-TW")}</td>
-          <td>${row.回報者 || '-'}</td>`;
-        tbody.appendChild(tr);
-      });
-    }
-
-    bossSelect.addEventListener("change", drawTable);
-    document.getElementById("searchInput").addEventListener("input", drawTable);
     document.getElementById("logFilter").addEventListener("input", loadSheetLog);
+    document.getElementById("bossSelect").addEventListener("change", drawTable);
+    document.getElementById("searchInput").addEventListener("input", drawTable);
     document.getElementById("reporter").value = localStorage.getItem("reporter") || "";
     document.getElementById("reporter").addEventListener("input", e => localStorage.setItem("reporter", e.target.value));
-    drawTable();
     loadSheetLog();
-    setInterval(() => { drawTable(); loadSheetLog(); }, 30000);
+    setInterval(loadSheetLog, 30000);
   </script>
 </body>
 </html>
