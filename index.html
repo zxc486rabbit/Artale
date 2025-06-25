@@ -21,10 +21,9 @@
 <body>
   <h1>🛡️ Artale Boss 頻道巡邏系統</h1>
   <button onclick="location.reload();">🔁 重新載入（保留記錄）</button>
+
   <div style="text-align:center;">
-    <label>
-      🙋‍♂️ 記錄者：<input id="reporter" placeholder="輸入你的暱稱" />
-    </label>
+    🙋‍♂️ 記錄者：<input id="reporter" placeholder="輸入你的暱稱" />
     <select id="bossSelect">
       <option value="mushroom">🍄 菇菇王</option>
       <option value="witch">❄️ 雪山魔女</option>
@@ -46,6 +45,17 @@
     </thead>
     <tbody id="channelTable"></tbody>
   </table>
+
+  <!-- 隱藏的表單送出 iframe -->
+  <iframe name="hiddenFrame" style="display:none;"></iframe>
+  <form id="reportForm" target="hiddenFrame" method="GET"
+    action="https://script.google.com/macros/s/AKfycbyd-ozk9faY-IThiYJEo7-OwJS0P6d8fIzh98ELO9qos15LETfEdz95qemJH8m2twos/exec"
+    style="display:none;">
+    <input name="boss" id="formBoss" />
+    <input name="channel" id="formChannel" />
+    <input name="status" id="formStatus" />
+    <input name="reporter" id="formReporter" />
+  </form>
 
   <hr>
   <h2>📋 全部回報紀錄（來自 Google Sheet）</h2>
@@ -76,8 +86,8 @@
     };
 
     const bossSelect = document.getElementById("bossSelect");
-    const getKey = () => `boss_${bossSelect.value}_data`;
     const sound = document.getElementById("pingSound");
+    const getKey = () => `boss_${bossSelect.value}_data`;
     const format = ts => new Date(ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
     const timeLeft = (ts, boss) => {
       const max = bossSettings[boss].max;
@@ -94,18 +104,20 @@
 
     function update(chKey, action) {
       const reporter = document.getElementById("reporter").value.trim();
-      const data = load();
-      const boss = bossSelect.value;
       const bossName = bossSelect.options[bossSelect.selectedIndex].text;
       const status = action === 'yes' ? '✅' : action === 'no' ? '❌' : '未記錄';
 
+      const data = load();
       if (action === 'reset') delete data[chKey];
       else data[chKey] = { status, time: Date.now(), notified: false };
       save(data);
 
-      // ✅ 改用 GET 傳資料到 Apps Script
-      const url = `${SHEET_API}?boss=${encodeURIComponent(bossName)}&channel=${chKey}&status=${status}&reporter=${encodeURIComponent(reporter)}`;
-      fetch(url).then(res => res.text()).then(console.log).catch(console.error);
+      // 🧠 使用 <form> 提交資料，避免 fetch 的 CORS 問題
+      document.getElementById("formBoss").value = bossName;
+      document.getElementById("formChannel").value = chKey;
+      document.getElementById("formStatus").value = status;
+      document.getElementById("formReporter").value = reporter;
+      document.getElementById("reportForm").submit();
 
       drawTable();
       loadSheetLog();
@@ -118,21 +130,21 @@
       const boss = bossSelect.value;
       const now = Date.now();
       const setting = bossSettings[boss];
-      const bossName = bossSelect.options[bossSelect.selectedIndex].text;
       const keyword = document.getElementById("searchInput").value.trim();
       let list = [];
+
       if (keyword) {
         const ch = parseInt(keyword);
         if (!isNaN(ch) && ch >= 1 && ch <= 4000) list.push(ch);
       } else {
-        const start = 1;
-        for (let i = start; i <= start + 100; i++) list.push(i);
+        for (let i = 1; i <= 100; i++) list.push(i);
       }
 
       list.forEach(i => {
         const chKey = `CH${i}`;
         const record = data[chKey];
         const tr = document.createElement("tr");
+
         if (record?.time) {
           const elapsed = now - record.time;
           if (elapsed >= setting.min && elapsed <= setting.max && !record.notified) {
@@ -141,6 +153,7 @@
             save(data);
           }
         }
+
         const statusClass = `status-${record?.status || '未記錄'}`;
         tr.classList.add(statusClass);
         tr.innerHTML = `
@@ -159,24 +172,28 @@
     }
 
     async function loadSheetLog() {
-      const res = await fetch(SHEET_API);
-      const data = await res.json();
-      const tbody = document.getElementById("sheetLog");
-      const keyword = document.getElementById("logFilter").value.toLowerCase();
-      tbody.innerHTML = "";
-      const sorted = data.sort((a, b) => new Date(b.時間) - new Date(a.時間));
-      sorted.forEach(row => {
-        const match = !keyword || Object.values(row).some(v => v.toLowerCase?.().includes(keyword));
-        if (!match) return;
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${row.Boss}</td>
-          <td>${row.頻道}</td>
-          <td>${row.狀態}</td>
-          <td>${new Date(row.時間).toLocaleString("zh-TW")}</td>
-          <td>${row.回報者 || '-'}</td>`;
-        tbody.appendChild(tr);
-      });
+      try {
+        const res = await fetch(SHEET_API);
+        const data = await res.json();
+        const tbody = document.getElementById("sheetLog");
+        const keyword = document.getElementById("logFilter").value.toLowerCase();
+        tbody.innerHTML = "";
+        const sorted = data.sort((a, b) => new Date(b.時間) - new Date(a.時間));
+        sorted.forEach(row => {
+          const match = !keyword || Object.values(row).some(v => v.toLowerCase?.().includes(keyword));
+          if (!match) return;
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${row.Boss}</td>
+            <td>${row.頻道}</td>
+            <td>${row.狀態}</td>
+            <td>${new Date(row.時間).toLocaleString("zh-TW")}</td>
+            <td>${row.回報者 || '-'}</td>`;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.warn("無法讀取 Google Sheet 資料（可能是 CORS）", err);
+      }
     }
 
     bossSelect.addEventListener("change", drawTable);
